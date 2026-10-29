@@ -22,6 +22,14 @@ if "diario" not in st.session_state:
     st.session_state.diario = []
 
 
+def e(s):
+    return s.replace("$", "\\$")
+
+
+def m(x):
+    return f"-${abs(x):.0f}" if x < 0 else f"${x:.0f}"
+
+
 def f(d):
     return datetime.strptime(d, "%Y-%m-%d")
 
@@ -116,11 +124,11 @@ def disenar(sim, es_put, delta_obj, ancho, capital, riesgo_pct):
     checks.append((ratio >= 1.2, f"Prima vale la pena (IV/vol real = {ratio:.2f}, mínimo 1.20)"))
     tend_ok = precio > sma50 if es_put else precio < sma50
     checks.append((tend_ok, "Tendencia a favor" if tend_ok else "Tendencia en contra del spread"))
-    checks.append((ev > 0, f"Ganancia esperada positiva (${ev:.0f} por contrato)" if ev > 0
-                   else f"Ganancia esperada NEGATIVA (${ev:.0f} por contrato)"))
+    checks.append((ev > 0, f"Ganancia esperada positiva ({m(ev)} por contrato)" if ev > 0
+                   else f"Ganancia esperada NEGATIVA ({m(ev)} por contrato)"))
     checks.append((corto.openInterest >= 300, f"Liquidez del strike vendido (interés abierto {int(corto.openInterest)})"))
     checks.append((n >= 1, f"Cabe en tu límite de riesgo ({n} contrato(s))" if n >= 1
-                   else f"Un contrato arriesga ${max_perd:.0f} y tu límite es ${presupuesto:.0f}"))
+                   else f"Un contrato arriesga {m(max_perd)} y tu límite es {m(presupuesto)}"))
     checks.append((p >= 0.75, f"Probabilidad de éxito {p*100:.0f}% (mínimo 75%)"))
     ok = all(c[0] for c in checks)
 
@@ -163,35 +171,38 @@ with tab1:
                 st.error(err)
             else:
                 st.session_state.sp = res
-        except Exception as e:
+        except Exception as ex:
             st.session_state.pop("sp", None)
-            st.error(f"No pude analizar {sim}. Intenta en un minuto. ({e})")
+            st.error(f"No pude analizar {sim}. Intenta en un minuto. ({ex})")
 
     r = st.session_state.get("sp")
     if r:
         nombre = "PUT" if r["es_put"] else "CALL"
-        st.subheader(f"{r['sim']} · ${r['precio']:.2f} · vence {r['venc']} ({r['dias']} días)")
+        st.subheader(e(f"{r['sim']} · ${r['precio']:.2f} · vence {r['venc']} ({r['dias']} días)"))
         if r["ok"]:
             st.success("✅ ABRIR (simulado): pasa las 7 reglas")
         else:
             st.warning("⏳ ESPERAR: no pasa todas las reglas")
         for ok, txt in r["checks"]:
-            st.write(("✅ " if ok else "❌ ") + txt)
+            st.write(e(("✅ " if ok else "❌ ") + txt))
 
         a, b = st.columns(2)
-        a.metric("Crédito (conservador)", f"${r['cred_nat']*100:.0f}")
-        b.metric("Pérdida máxima", f"${r['max_perd']:.0f}")
+        a.metric("Crédito (conservador)", m(r["cred_nat"] * 100))
+        b.metric("Pérdida máxima", m(r["max_perd"]))
         c, d = st.columns(2)
         c.metric("Punto de equilibrio", f"${r['be']:.2f}")
         d.metric("Probabilidad de éxito", f"{r['p']*100:.0f}%")
-        st.caption(f"Ganancia máxima ${r['max_gan']:.0f} por contrato. Por cada $1 que ganas, arriesgas "
-                   f"${r['max_perd']/max(r['max_gan'],1):.1f}.")
+        st.caption(e(f"Ganancia máxima {m(r['max_gan'])} por contrato. Por cada $1 que ganas, arriesgas "
+                     f"${r['max_perd']/max(r['max_gan'],1):.1f}."))
 
-        vende = "Vender" if True else ""
-        st.info(f"**Orden para Robinhood ({r['n']} contrato(s))**\n\n"
-                f"Vender 1 {nombre} {r['corto']:g} · Comprar 1 {nombre} {r['largo']:g} · vence {r['venc']}\n\n"
-                f"Precio límite sugerido (crédito): **${r['cred_mid']:.2f}** por acción. "
-                f"En el peor caso cobrarías ${r['cred_nat']:.2f}.")
+        if r["n"] >= 1:
+            st.info(e(f"**Orden para Robinhood ({r['n']} contrato(s))**\n\n"
+                      f"Vender 1 {nombre} {r['corto']:g} · Comprar 1 {nombre} {r['largo']:g} · vence {r['venc']}\n\n"
+                      f"Precio límite sugerido (crédito): **${r['cred_mid']:.2f}** por acción. "
+                      f"En el peor caso cobrarías ${r['cred_nat']:.2f}."))
+        else:
+            st.info(e(f"Con tu límite actual no cabe ni un contrato (arriesga {m(r['max_perd'])}). "
+                      "Reduce el ancho del spread o sube el capital o el % de riesgo."))
         st.caption("Cierra al 50% de la ganancia, si la pérdida llega a 2 veces el crédito, "
                    "o cuando falten 21 días para el vencimiento.")
 
@@ -268,19 +279,19 @@ with tab2:
             st.subheader("📈 Desempeño")
             gan = [x for x in cerr if x > 0]
             per = [x for x in cerr if x <= 0]
-            m = c = 0
+            peor_racha = racha = 0
             for x in cerr:
-                c = c + 1 if x < 0 else 0
-                m = max(m, c)
+                racha = racha + 1 if x < 0 else 0
+                peor_racha = max(peor_racha, racha)
             k1, k2 = st.columns(2)
             k1.metric("Operaciones cerradas", len(cerr))
             k2.metric("Acierto", f"{len(gan)/len(cerr)*100:.0f}%")
             k3, k4 = st.columns(2)
-            k3.metric("Ganancia promedio", f"${np.mean(gan):.0f}" if gan else "-")
-            k4.metric("Pérdida promedio", f"${np.mean(per):.0f}" if per else "-")
+            k3.metric("Ganancia promedio", m(np.mean(gan)) if gan else "-")
+            k4.metric("Pérdida promedio", m(np.mean(per)) if per else "-")
             k5, k6 = st.columns(2)
-            k5.metric("Resultado por operación", f"${np.mean(cerr):.0f}")
-            k6.metric("Resultado total", f"${sum(cerr):.0f}")
-            st.write(f"Peor pérdida: **${min(cerr):.0f}** · Peor racha de pérdidas: **{m}**")
+            k5.metric("Resultado por operación", m(np.mean(cerr)))
+            k6.metric("Resultado total", m(sum(cerr)))
+            st.write(e(f"Peor pérdida: **{m(min(cerr))}** · Peor racha de pérdidas: **{peor_racha}**"))
             if len(cerr) < 50:
                 st.warning(f"Con {len(cerr)} operaciones todavía no hay evidencia suficiente. Objetivo: 50 o más.")
